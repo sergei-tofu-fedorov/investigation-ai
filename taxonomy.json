@@ -1,0 +1,6 @@
+{
+  "area": ["payments", "invoices", "estimates", "auth", "notifications", "pdf"],
+  "kind": ["regression", "config", "data", "infra", "client-bug", "question", "known-issue"],
+  "source": ["gcp-logs", "sentry", "code", "mongo", "mixed"],
+  "service": ["invoices-api", "invoices-worker", "tofu-invoices", "tofu-auth", "tofu-ai"]
+}
