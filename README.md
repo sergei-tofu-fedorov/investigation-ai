@@ -13,6 +13,7 @@ The knowledge base of the Tofu.AI Investigations module (FS-1111): everything th
 | `INDEX.md` | projection | the service | regenerated from Postgres; one line per investigation run |
 | `runs/` | projection | the service | one markdown file per run: findings, citations, fingerprints, limitations |
 | `.claude/skills/` | source | humans | PR — investigation skills the agent loads (wired into the agent workspace at deploy) |
+| `docs/` | source | humans | PR — platform reference docs for the agent: service map, data-store inventory, the Investigations service itself |
 
 **Ownership rule (prevents merge conflicts):** the service writes only `INDEX.md` + `runs/`; humans write only the source files. Don't hand-edit projections — they are rebuilt from Postgres and your edits will be overwritten.
 
