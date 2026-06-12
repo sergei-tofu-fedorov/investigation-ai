@@ -5,13 +5,14 @@ description: ROOT playbook for backend investigations on the Tofu/Invoices platf
 
 # Investigation playbook (root)
 
-You have three specialized skills — load each when its source comes into play:
+You have specialized skills — load each when its source comes into play:
 
 | Skill | When |
 |---|---|
 | `investigation-history` | grep recipes for the `.tofu-ai/` knowledge tree — the history-first step and the continuous-matching rule below |
 | `investigation-sentry` | the task mentions Sentry (alert link, issue id, client errors) |
 | `investigation-gcp-logs` | before composing any `gcloud logging read` query |
+| `reference-codebase` | reading/grepping the `_reference/` source checkouts, or finding the web/iOS API contract (route, DTO) a client depends on — `Invoices.Backend` is the BFF that owns those contracts |
 
 ## Step order
 
