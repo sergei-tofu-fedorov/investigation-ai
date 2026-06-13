@@ -1,28 +1,28 @@
 ---
 name: investigation-history
-description: Search past investigations and known issues — the .tofu-ai knowledge tree (grep, primary) plus the service API (secondary). Invoke at investigation start AND the moment any new concrete identifier surfaces (trace id, Sentry short-id, error type, account id).
+description: Search past investigations and known issues — the knowledge-repo tree at your working-directory root (grep, primary) plus the service API (secondary). Invoke at investigation start AND the moment any new concrete identifier surfaces (trace id, Sentry short-id, error type, account id).
 ---
 
 # Investigation history (self-serve recall)
 
-Every past investigation is projected into the **`.tofu-ai/` knowledge tree** in your working directory — greppable text, no API needed. Search it BEFORE deep-diving anything, and again for every new identifier you surface mid-investigation.
+Every past investigation is projected into the **knowledge tree at the root of your working directory** (the knowledge repo, cloned on start) — greppable text, no API needed. Search it BEFORE deep-diving anything, and again for every new identifier you surface mid-investigation.
 
 ## Primary: grep the knowledge tree
 
 ```bash
 # Exact-match recall — trace ids, Sentry short-ids, fingerprints, account ids, error text.
 # A hit = this was investigated before; read the file.
-grep -ril "c23f65a67d88734068d761367a437f0c" .tofu-ai/runs/
-grep -ril "ContentNotFoundException" .tofu-ai/runs/
+grep -ril "c23f65a67d88734068d761367a437f0c" runs/
+grep -ril "ContentNotFoundException" runs/
 
 # Fingerprint match (canonical error identity — sentry:<issue-id> or err:<hash>):
-grep -rl "sentry:INVOICE-MAKER-IOS-2Z6" .tofu-ai/runs/
+grep -rl "sentry:INVOICE-MAKER-IOS-2Z6" runs/
 
 # The index — one line per run: date | id | status | tags | fingerprints | summary:
-# Read .tofu-ai/INDEX.md (scan it when the ask is thematic rather than id-shaped)
+# Read INDEX.md (scan it when the ask is thematic rather than id-shaped)
 
 # Human-verified verdicts (you must have read this already — it is mandatory first):
-# Read .tofu-ai/known-issues.md
+# Read known-issues.md
 ```
 
 Run files are `runs/YYYY-MM-DD_<id8>_<slug>.md` with `## Findings` (citations, fingerprints) and `## Limitations` sections — `Read` the matching file; it carries the prior conclusion with file:line evidence.
