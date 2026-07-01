@@ -2,12 +2,14 @@
 name: stage-admin
 description: >-
   Read AND MODIFY data in NON-PROD environments via the custom `mcp__stage_admin__*` tools — Mongo
-  (mongo_find / mongo_count / mongo_update / mongo_delete) and Postgres (pg_query / pg_execute). Pick the
-  target with the `conn` argument: Mongo `stage` / `dev` = the Invoices `invoicesDB` (accounts, invoices,
-  estimates, clients, items, subscriptions); Postgres `auth` = Tofu.Auth (users, roles, tenants, invites).
-  Use when asked to inspect, fix, seed, reset, or clean up stage/dev data. Holds the collection/table schema
-  + enum encodings so you don't have to rediscover them. NON-PROD ONLY — never prod. Every write needs
-  confirm:true and a specific filter / WHERE. Invoke BEFORE calling any stage_admin tool.
+  (mongo_find / mongo_count / mongo_insert / mongo_update / mongo_delete), Postgres (pg_query / pg_execute),
+  and BigQuery (bq_query / bq_execute). Pick the target with the `conn` argument: Mongo `stage` / `dev` = the
+  Invoices `invoicesDB` (accounts, invoices, estimates, clients, items, subscriptions); Postgres `auth` =
+  Tofu.Auth (users, roles, tenants, invites); BigQuery `stage` = the `ai_analysis_us` analytics warehouse
+  (FSM-fit marts, recurring-offer cohort). Use when asked to inspect, fix, seed, reset, or clean up stage/dev
+  data, or to recalc FSM-fit / recurring-offer analytics. Holds the collection/table schema + enum encodings
+  so you don't have to rediscover them. NON-PROD ONLY — never prod. Every write needs confirm:true and a
+  specific filter / WHERE. Invoke BEFORE calling any stage_admin tool.
 ---
 
 # Non-prod data admin (stage / dev only)
@@ -17,8 +19,9 @@ and **not** prod. Use it only when the user explicitly asks you to inspect or ch
 
 | Backend | Tools |
 |---|---|
-| Mongo | `mcp__stage_admin__mongo_find`, `mcp__stage_admin__mongo_count`, `mcp__stage_admin__mongo_update`, `mcp__stage_admin__mongo_delete` |
+| Mongo | `mcp__stage_admin__mongo_find`, `mcp__stage_admin__mongo_count`, `mcp__stage_admin__mongo_insert`, `mcp__stage_admin__mongo_update`, `mcp__stage_admin__mongo_delete` |
 | Postgres | `mcp__stage_admin__pg_query` (read), `mcp__stage_admin__pg_execute` (write) |
+| BigQuery | `mcp__stage_admin__bq_query` (read: SELECT/WITH/EXPLAIN), `mcp__stage_admin__bq_execute` (write: INSERT/UPDATE/DELETE/MERGE/CALL) |
 
 These tools exist **only in the default HTTP session** — they are not available from the Slack bot. If you don't see
 them, the capability isn't enabled for this session; say so and stop (there is no `mongosh` / `psql` / `gcloud` here).
@@ -33,6 +36,12 @@ the tool says so and lists what's available.
 | `stage` | Mongo | Invoices store, **stage** environment | `invoicesDB` |
 | `dev` | Mongo | Invoices store, **dev** environment (same schema as stage) | `invoicesDB` |
 | `auth` | Postgres | Tofu.Auth — users, roles, tenant-role assignments, invitations | (Tofu.Auth DB) |
+| `stage` | BigQuery | Tofu.AI analytics warehouse (`invoicesapp-project-test`) | dataset `ai_analysis_us` |
+
+> The `conn` label `stage` is shared by Mongo and BigQuery — the **tool** picks the backend (`mongo_*` → Mongo
+> `invoicesDB`; `bq_*` → BigQuery `ai_analysis_us`). The BigQuery connection defaults its dataset to `ai_analysis_us`,
+> so tables/procedures can be written **dataset-qualified without a project** (e.g. `ai_analysis_us.src_invoices`,
+> `CALL ai_analysis_us.build_recurring_offer_cohort()`).
 
 > **`stage` and `dev` are the SAME schema, DIFFERENT data** (two separate environments). Always pass the right
 > `conn` — a fix meant for `dev` must not land on `stage`. State which environment you're touching back to the user.
@@ -58,6 +67,11 @@ the tool says so and lists what's available.
 9. **Default is single-doc.** `mongo_update`/`mongo_delete` touch the first match only unless you pass `multi:true`
    — and only after a `mongo_count`.
 10. **Every call is audited** (`event="stage_admin_op"`, with the `conn`, filter / SQL, and affected counts).
+11. **BigQuery specifics.** `bq_query` is read-only (SELECT/WITH/EXPLAIN); `bq_execute` runs one write —
+    INSERT/UPDATE/DELETE/MERGE **or `CALL <proc>`** — with `confirm:true` (UPDATE/DELETE still need a WHERE; no
+    DDL — CREATE/DROP/ALTER/TRUNCATE is rejected, so schema/proc changes stay a deploy). Every BQ job is
+    hard-capped at `bqMaxBytesBilled` (~1 GB) — a wide scan **fails** rather than billing; narrow with the
+    partition columns (`date`) / cluster keys (`account_id`) shown below. Prefer dataset-qualified names.
 
 ---
 
@@ -215,6 +229,81 @@ Ids are `uuid` (Users, TokenRevocations, Invitation*) or `integer` identity (Rol
 
 ---
 
+# BigQuery — stage analytics warehouse (`conn: stage`, dataset `ai_analysis_us`)
+
+Tofu.AI's analytics warehouse on `invoicesapp-project-test`. Built from the daily Atlas snapshot by SQL **procedures**
+(`build_*`, orchestrated by `rebuild_warehouse`); marts are `CREATE OR REPLACE` snapshots (no history). Partitioned
+tables (`date` MONTH) + clustered on `account_id` — filter on those to stay under the byte cap.
+
+**Key tables/views** (list live ones with `bq_query`: `SELECT table_name FROM ai_analysis_us.INFORMATION_SCHEMA.TABLES`):
+`src_invoices` · `src_estimates` · `src_accounts` · `src_clients` · `src_items` (typed mirrors of the Mongo collections),
+`mart_account_metrics` (per-account 30d volume, avg amount, repeat ratio …), `mart_account_fsm_fit` (FSM-fit results),
+`mart_account_current_plan` (active-subscription audience), `mart_recurring_offer_groups` / `mart_recurring_offer_cohort`
+(recurring-offer targeting), `dim_account`, `v_fsm_fit` (metrics ⟕ fsm-fit view).
+
+> **Stage caveats.** ⚠️ On stage `mart_account_current_plan` is a **fake static table — every account is "active"**
+> (no real subscription events on non-prod), so the subscription gate is effectively always-true here. The
+> `mart_recurring_offer_*` tables **don't exist until the procedures are first CALLed** (the procs `CREATE OR REPLACE`
+> them). Subscription/SKU routines are prod-shaped; treat cohort output on stage as structural, not real audience.
+
+## FSM-fit analysis (what it is)
+
+Per account, the Hangfire job **`AnalyzeFsmFitJob`** (in `tofu-ai-api`, LLM + rule scorer) classifies the account's
+invoices/estimates and UPSERTs one row into **`mart_account_fsm_fit`** (CDC via Storage Write API). It derives 6
+evidence booleans (on_site_work, labour_billing, scheduling, recurring_billing, complex_multi_line_jobs,
+contract_based_billing), an **industry** (3A taxonomy, e.g. cleaning / lawn_care) + specialization, a **score** (0–100)
+and **tier**, an `industry_bonus`, and `recommended_offers[]`. `mart_account_fsm_fit` columns (stage-verified):
+`account_id`, `industry`, `score` (FLOAT), `tier`, `industry_bonus` (FLOAT), `analyzed_at`, **`expires_at`**,
+`updated_at` (plus evidence/offers/provenance columns). **Recompute is done by the C# job, not by a BQ procedure** —
+`bq_execute` can only *mark* accounts for recompute (below), it cannot run the LLM.
+
+## Recalculate `mart_recurring_offer_cohort` (pure BQ — via `bq_execute` CALL)
+
+The cohort is 100% SQL procedures, so you can rebuild it directly. **Canonical order** (from `refresh_recurring_offer.sql`):
+
+```
+bq_execute { "conn": "stage", "confirm": true, "sql": "CALL ai_analysis_us.build_recurring_offer_groups()" }
+bq_execute { "conn": "stage", "confirm": true, "sql": "CALL ai_analysis_us.build_recurring_offer_cohort()" }
+```
+
+`build_recurring_offer_groups()` builds `mart_recurring_offer_groups` (clients with ≥2 repeats by client/amount/items);
+`build_recurring_offer_cohort()` then filters to eligible groups (≥3 repeats, 3A industry, active plan) into
+`mart_recurring_offer_cohort`. Both take **no arguments** and `CREATE OR REPLACE` their target table.
+
+**Upstream freshness** — the cohort reads `mart_account_metrics`, `mart_account_fsm_fit`, and `mart_account_current_plan`.
+If those are stale, refresh them *first* (in this order), else re-run the whole warehouse:
+
+```
+bq_execute { "conn":"stage","confirm":true,"sql":"CALL ai_analysis_us.build_account_metrics()" }
+bq_execute { "conn":"stage","confirm":true,"sql":"CALL ai_analysis_us.build_account_current_plan()" }
+# then the two recurring-offer CALLs above
+# (nuclear option — full rebuild from the latest snapshot: CALL ai_analysis_us.rebuild_warehouse(<snapshot_uri>, <snapshot_ts>) )
+```
+
+## Mark accounts "expired" to trigger FSM-fit recalc
+
+`AnalyzeFsmFitJob` picks candidates = accounts with **no** `mart_account_fsm_fit` row **OR** `expires_at < CURRENT_TIMESTAMP()`
+(then optional activity/maturity/volume/subscription gates), ordered by `expires_at`, capped at `BatchSize`. So to force
+re-analysis of specific accounts, make their row look stale, then wait for the next job tick:
+
+```
+# Option A — expire in place (keeps history until recompute):
+bq_execute { "conn":"stage","confirm":true,
+  "sql":"UPDATE ai_analysis_us.mart_account_fsm_fit SET expires_at = TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 SECOND) WHERE account_id = '<ID>'" }
+
+# Option B — cold-start (delete the row entirely → treated as never-analyzed):
+bq_execute { "conn":"stage","confirm":true,
+  "sql":"DELETE FROM ai_analysis_us.mart_account_fsm_fit WHERE account_id = '<ID>'" }
+```
+
+> ⚠️ **Marking only queues the recompute — it does not run it.** The actual re-analysis happens on the next
+> `AnalyzeFsmFitJob` tick, and **only if that job is enabled/running on the env** (`Analyses:FsmFit:Enabled`, default
+> cadence hourly). If the job is off on stage, an expired/deleted row simply stays missing until it runs. The account
+> must also pass the configured gates (recent-invoice window, active plan, etc.) to be picked. Confirm intent with the
+> user before bulk-expiring (each account is a real LLM call = cost + time).
+
+---
+
 # Recipes
 
 **Inspect an account's invoices (read, stage):**
@@ -258,7 +347,24 @@ mongo_update { "conn": "stage", "coll": "estimates", "filter": { "AccountId": "<
                "update": { "$set": { "Status": 4 } }, "multi": true, "confirm": true }
 ```
 
+**Inspect one account's FSM-fit result (BigQuery read):**
+```
+bq_query { "conn": "stage",
+  "sql": "SELECT account_id, industry, tier, score, analyzed_at, expires_at FROM ai_analysis_us.mart_account_fsm_fit WHERE account_id = '<ID>'" }
+```
+
+**Count invoices for an account, cheaply (BigQuery — filter the cluster key):**
+```
+bq_query { "conn": "stage", "sql": "SELECT COUNT(*) AS n FROM ai_analysis_us.src_invoices WHERE account_id = '<ID>'" }
+```
+
+**Rebuild the recurring-offer cohort (BigQuery write — two CALLs, in order):**
+```
+bq_execute { "conn": "stage", "confirm": true, "sql": "CALL ai_analysis_us.build_recurring_offer_groups()" }
+bq_execute { "conn": "stage", "confirm": true, "sql": "CALL ai_analysis_us.build_recurring_offer_cohort()" }
+```
+
 ## After a change
 Report back what changed: the `conn`, the tool, the filter / WHERE, and the affected count the tool returned (e.g.
-"dev · updated 1 invoice → Status=paid"). If a write reports `matched:0` / `rowCount:0`, the filter missed — re-read
-and adjust rather than broadening blindly.
+"dev · updated 1 invoice → Status=paid"; "stage · CALL build_recurring_offer_cohort → OK"). If a write reports
+`matched:0` / `rowCount:0` / `affectedRows:0`, the filter missed — re-read and adjust rather than broadening blindly.
