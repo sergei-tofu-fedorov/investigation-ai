@@ -23,8 +23,9 @@ and **not** prod. Use it only when the user explicitly asks you to inspect or ch
 | Postgres | `mcp__stage_admin__pg_query` (read), `mcp__stage_admin__pg_execute` (write) |
 | BigQuery | `mcp__stage_admin__bq_query` (read: SELECT/WITH/EXPLAIN), `mcp__stage_admin__bq_execute` (write: INSERT/UPDATE/DELETE/MERGE/CALL) |
 
-These tools exist **only in the default HTTP session** — they are not available from the Slack bot. If you don't see
-them, the capability isn't enabled for this session; say so and stop (there is no `mongosh` / `psql` / `gcloud` here).
+These tools are available on any session with the stage-admin capability — the default HTTP session **and** the Slack
+bot. If you don't see them in your live tool list, the capability isn't enabled for this session; say so and stop
+(there is no `mongosh` / `psql` / `gcloud` / `bq` CLI here — only these MCP tools).
 
 ## Connections — pick one with `conn`
 
