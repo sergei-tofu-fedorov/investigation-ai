@@ -23,9 +23,12 @@ and **not** prod. Use it only when the user explicitly asks you to inspect or ch
 | Postgres | `mcp__stage_admin__pg_query` (read), `mcp__stage_admin__pg_execute` (write) |
 | BigQuery | `mcp__stage_admin__bq_query` (read: SELECT/WITH/EXPLAIN), `mcp__stage_admin__bq_execute` (write: INSERT/UPDATE/DELETE/MERGE/CALL) |
 
-These tools are available on any session with the stage-admin capability — the default HTTP session **and** the Slack
-bot. If you don't see them in your live tool list, the capability isn't enabled for this session; say so and stop
-(there is no `mongosh` / `psql` / `gcloud` / `bq` CLI here — only these MCP tools).
+These tools are always loaded on any session that has the stage-admin capability — the default HTTP session **and**
+the Slack bot. Call them directly by their full name (e.g. `mcp__stage_admin__bq_query`); they are force-loaded, so
+you do **not** need ToolSearch to discover them, and they may be absent from a searchable/deferred tool index — that
+is expected, not a sign they're missing. Do **not** pre-judge availability from a tool listing: just invoke the tool.
+Only if an **actual tool call** returns a "no such tool" / not-available error is the capability off for this session
+— then say so and stop (there is no `mongosh` / `psql` / `gcloud` / `bq` CLI here — only these MCP tools).
 
 ## Connections — pick one with `conn`
 
